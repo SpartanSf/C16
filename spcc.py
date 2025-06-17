@@ -14,14 +14,6 @@ int factorial(int n) {
     }
 }
 
-int factorial(int n) {
-    if (n == 0) {
-        return 1;
-    } else {
-        return n * factorial(n - 1);
-    }
-}
-
 void main() {
     int total = 0;
     int i = 0;
@@ -44,23 +36,29 @@ diagnostics = []
 def r_error(node, msg, code):
     if isinstance(node, Token):
         ln, col = node.line, node.column
+        length = len(node.value)
     else:
         ln, col = node.meta.line, node.meta.column
-    diagnostics.append((ln, col, 'error', f"{msg} [{code}]"))
+        length = 1
+    diagnostics.append((ln, col, length, 'error', f"{msg} [{code}]"))
 
 def r_warn(node, msg, code):
     if isinstance(node, Token):
         ln, col = node.line, node.column
+        length = len(node.value)
     else:
         ln, col = node.meta.line, node.meta.column
-    diagnostics.append((ln, col, 'warning', f"{msg} [{code}]"))
+        length = 1
+    diagnostics.append((ln, col, length, 'warning', f"{msg} [{code}]"))
 
 def r_note(node, msg):
     if isinstance(node, Token):
         ln, col = node.line, node.column
+        length = len(node.value)
     else:
         ln, col = node.meta.line, node.meta.column
-    diagnostics.append((ln, col, 'note', f"{msg}"))
+        length = 1
+    diagnostics.append((ln, col, length, 'note', f"{msg}"))
 
 
 class VarSym:
@@ -281,11 +279,11 @@ check_program(tree)
 
 
 kind_order = {'error': 0, 'warning': 1, 'note': 2}
-diagnostics.sort(key=lambda x: (x[0], x[1], kind_order[x[2]]))
+diagnostics.sort(key=lambda x: (x[0], x[1], kind_order[x[3]]))
 
-for ln, col, kind, msg in diagnostics:
+for ln, col, length, kind, msg in diagnostics:
     src = lines[ln - 1]
-    ptr = " " * (col - 1) + "^"
+    ptr = " " * (col - 1) + "^" * max(length, 1)
     if kind == 'error':
         print(f"{ln:>4} | {src}\n     | {ptr} error: {msg}\n")
     elif kind == 'warning':
@@ -293,7 +291,7 @@ for ln, col, kind, msg in diagnostics:
     else:
         print(f"{ln:>4} | {src}\n     | {ptr} note: {msg}\n")
 
-if any(k == 'error' for _, _, k, _ in diagnostics):
-    print(f"\nFound {sum(1 for d in diagnostics if d[2] == 'error')} error(s). See errors.md for more information on error codes.")
+if any(kind == 'error' for _, _, _, kind, _ in diagnostics):
+    print(f"\nFound {sum(1 for d in diagnostics if d[3] == 'error')} error(s). See errors.md for more information on error codes.")
 else:
     print("\nNo errors found.")
