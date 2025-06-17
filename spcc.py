@@ -16,6 +16,7 @@ int factorial(int n) {
 
 void main() {
     int total = 0;
+    total[0] = 3;
     int i = 0;
 
     while (i < 5) {

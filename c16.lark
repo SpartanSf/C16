@@ -6,6 +6,7 @@ RBRACK: "]"
 program: (function | declaration | statement)*
 
 func_call: NAME "(" [expression ("," expression)*] ")"
+array_access: NAME "[" expression "]"
 
 declaration: INT_TYPE NAME (LBRACK NUMBER RBRACK)? ("=" ("{" expression ("," expression)* "}" | expression))? ";"
 
@@ -23,8 +24,7 @@ statement: var_declaration ";"
 
 var_declaration: INT_TYPE NAME (LBRACK NUMBER RBRACK)? ("=" ("{" expression ("," expression)* "}" | expression))?
 
-assignment: NAME "=" expression
-          | NAME LBRACK expression RBRACK "=" expression
+assignment: (NAME | array_access) "=" expression
 
 return_stmt: "return" expression
 
@@ -51,7 +51,7 @@ block: "{" statement* "}"
 ?factor: NUMBER                   -> number
        | NAME                     -> var
        | func_call
-       | NAME "[" expression "]"  -> array_access
+       | array_access
        | "(" expression ")"
 
 INT_TYPE: "int"
