@@ -1,0 +1,64 @@
+?start: program
+
+LBRACK: "["
+RBRACK: "]"
+
+program: (function | declaration | statement)*
+
+func_call: NAME "(" [expression ("," expression)*] ")"
+
+declaration: INT_TYPE NAME (LBRACK NUMBER RBRACK)? ("=" ("{" expression ("," expression)* "}" | expression))? ";"
+
+function: (INT_TYPE | VOID_TYPE) NAME "(" [parameter ("," parameter)*] ")" block
+
+parameter: INT_TYPE NAME
+
+statement: var_declaration ";"
+         | assignment ";"
+         | return_stmt ";"
+         | if_stmt
+         | while_stmt
+         | block
+         | func_call ";" -> func_stmt
+
+var_declaration: INT_TYPE NAME (LBRACK NUMBER RBRACK)? ("=" ("{" expression ("," expression)* "}" | expression))?
+
+assignment: NAME "=" expression
+          | NAME LBRACK expression RBRACK "=" expression
+
+return_stmt: "return" expression
+
+if_stmt: "if" "(" expression ")" block ("else" block)?
+
+while_stmt: "while" "(" expression ")" block
+
+block: "{" statement* "}"
+
+?expression: expression "==" expression   -> eq
+           | expression "!=" expression   -> neq
+           | expression "<" expression    -> lt
+           | expression "<=" expression   -> lte
+           | expression ">" expression    -> gt
+           | expression ">=" expression   -> gte
+           | expression "+" expression    -> add
+           | expression "-" expression    -> sub
+           | expression "*" expression    -> mul
+           | expression "/" expression    -> div
+           | term
+
+?term: factor
+
+?factor: NUMBER                   -> number
+       | NAME                     -> var
+       | func_call
+       | NAME "[" expression "]"  -> array_access
+       | "(" expression ")"
+
+INT_TYPE: "int"
+VOID_TYPE: "void"
+
+%import common.CNAME -> NAME
+%import common.INT -> NUMBER
+%import common.WS
+%ignore WS
+%ignore /\/\/[^\n]*/
