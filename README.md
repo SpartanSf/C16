@@ -1,0 +1,15 @@
+
+# The C16 Compiler
+
+C16 is a simple C compiler for HuntaBadday's LWC33 CPU. There is no guarantee, at all, that all C functions operate and exist as you might expect.
+
+**What is completed?**
+
+- Parser and AST builder via `Lark`
+- Modern semantics checker
+
+**What is not completed?**
+
+- The actual compiler
+- A proper malloc
+- Parsing and semantics checking for certain C keywords (e.g. `for`)
