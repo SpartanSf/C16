@@ -14,9 +14,16 @@ int factorial(int n) {
     }
 }
 
+int factorial(int n) {
+    if (n == 0) {
+        return 1;
+    } else {
+        return n * factorial(n - 1);
+    }
+}
+
 void main() {
     int total = 0;
-    total[0] = 3;
     int i = 0;
 
     while (i < 5) {
@@ -32,24 +39,28 @@ parser = Lark(c16_grammar, start="program", parser="lalr", propagate_positions=T
 tree = parser.parse(code)
 lines = code.splitlines()
 
-errors = []
-warnings = []
-
+diagnostics = []
 
 def r_error(node, msg, code):
     if isinstance(node, Token):
         ln, col = node.line, node.column
     else:
         ln, col = node.meta.line, node.meta.column
-    errors.append((ln, col, f"{msg} [{code}]"))
-
+    diagnostics.append((ln, col, 'error', f"{msg} [{code}]"))
 
 def r_warn(node, msg, code):
     if isinstance(node, Token):
         ln, col = node.line, node.column
     else:
         ln, col = node.meta.line, node.meta.column
-    warnings.append((ln, col, f"{msg} [{code}]"))
+    diagnostics.append((ln, col, 'warning', f"{msg} [{code}]"))
+
+def r_note(node, msg):
+    if isinstance(node, Token):
+        ln, col = node.line, node.column
+    else:
+        ln, col = node.meta.line, node.meta.column
+    diagnostics.append((ln, col, 'note', f"{msg}"))
 
 
 class VarSym:
@@ -62,8 +73,11 @@ class VarSym:
 
 
 class FunSym:
-    def __init__(self, name, ret_type, params):
-        self.name, self.ret_type, self.params = name, ret_type, params
+    def __init__(self, name, ret_type, params, defining_tok):
+        self.name = name
+        self.ret_type = ret_type
+        self.params = params
+        self.defining_tok = defining_tok
 
 
 globals_sym = {}
@@ -98,7 +112,10 @@ for node in tree.children:
                 params.append((n_tok.value, t_tok.value))
         if name_tok.value in functions:
             r_error(name_tok, f"redeclaration of `{name_tok.value}`", "E001")
-        functions[name_tok.value] = FunSym(name_tok.value, ret_tok.value, params)
+            orig_fun = functions[name_tok.value]
+            r_note(orig_fun.defining_tok, f"previous declaration of `{name_tok.value}` here")
+        else:
+            functions[name_tok.value] = FunSym(name_tok.value, ret_tok.value, params, name_tok)
 
     else:
         r_error(node, f"unexpected top-level `{node.data}`", "E002")
@@ -262,22 +279,21 @@ def check_expr(expr, scopes, current_fun):
 
 check_program(tree)
 
-for ln, col, msg in warnings:
+
+kind_order = {'error': 0, 'warning': 1, 'note': 2}
+diagnostics.sort(key=lambda x: (x[0], x[1], kind_order[x[2]]))
+
+for ln, col, kind, msg in diagnostics:
     src = lines[ln - 1]
     ptr = " " * (col - 1) + "^"
-    print(f"{ln:>4} | {src}\n     | {ptr} warning: {msg}\n")
+    if kind == 'error':
+        print(f"{ln:>4} | {src}\n     | {ptr} error: {msg}\n")
+    elif kind == 'warning':
+        print(f"{ln:>4} | {src}\n     | {ptr} warning: {msg}\n")
+    else:
+        print(f"{ln:>4} | {src}\n     | {ptr} note: {msg}\n")
 
-if len(warnings) >= 1:
-    print("")
-
-for ln, col, msg in errors:
-    src = lines[ln - 1]
-    ptr = " " * (col - 1) + "^"
-    print(f"{ln:>4} | {src}\n     | {ptr} error: {msg}\n")
-
-if errors:
-    print(
-        f"\nFound {len(errors)} error(s). See errors.md for more information on error codes."
-    )
+if any(k == 'error' for _, _, k, _ in diagnostics):
+    print(f"\nFound {sum(1 for d in diagnostics if d[2] == 'error')} error(s). See errors.md for more information on error codes.")
 else:
     print("\nNo errors found.")
