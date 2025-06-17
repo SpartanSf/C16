@@ -69,8 +69,11 @@ This warning is triggered when a variable is declared but never used.
 Example:
 
 ```none
-12 | int factorial(int n) {
-   |     ^ error: redeclaration of `factorial` [E001]
+   4 | int factorial(int n) {
+     |     ^ note: previous declaration of `factorial` here
+
+  12 | int factorial(int n) {
+     |     ^ error: redeclaration of `factorial` [E001]
 ```
 
 This error is triggered when a function is declared which shares a name with another known function.
