@@ -1,64 +1,181 @@
 ?start: program
 
-LBRACK: "["
-RBRACK: "]"
+program: (declaration | function | typedef | struct_def | statement)*
 
-program: (function | declaration | statement)*
 
-func_call: NAME "(" [expression ("," expression)*] ")"
-array_access: NAME "[" expression "]"
+base_type: INT_TYPE
+         | VOID_TYPE
+         | STRUCT NAME
 
-declaration: INT_TYPE NAME (LBRACK NUMBER RBRACK)? ("=" ("{" expression ("," expression)* "}" | expression))? ";"
+?type: base_type STAR*
 
-function: (INT_TYPE | VOID_TYPE) NAME "(" [parameter ("," parameter)*] ")" block
+typedef: TYPEDEF type NAME ";"
 
-parameter: INT_TYPE NAME
+struct_def: STRUCT NAME field_block ";"
 
-statement: var_declaration ";"
-         | assignment ";"
-         | return_stmt ";"
+field_block: "{" declaration* "}"
+
+
+declaration: type declarator ("=" initializer)? ";"
+
+inline_declaration: type declarator ("=" initializer)?
+
+declarator: NAME (LBRACK NUMBER RBRACK)?
+
+initializer: expression
+           | "{" expression ("," expression)* "}"
+
+
+function: type NAME LPAR [parameter (COMMA parameter)*] RPAR block
+
+parameter: type [declarator]
+
+
+statement: block
+         | var_declaration ";"
          | if_stmt
          | while_stmt
-         | block
-         | func_call ";" -> func_stmt
-
-var_declaration: INT_TYPE NAME (LBRACK NUMBER RBRACK)? ("=" ("{" expression ("," expression)* "}" | expression))?
-
-assignment: (NAME | array_access) "=" expression
-
-return_stmt: "return" expression
-
-if_stmt: "if" "(" expression ")" block ("else" block)?
-
-while_stmt: "while" "(" expression ")" block
+         | for_stmt
+         | switch_stmt
+         | break_stmt
+         | continue_stmt
+         | return_stmt ";"
+         | expr_stmt ";"
 
 block: "{" statement* "}"
 
-?expression: expression "==" expression   -> eq
-           | expression "!=" expression   -> neq
-           | expression "<" expression    -> lt
-           | expression "<=" expression   -> lte
-           | expression ">" expression    -> gt
-           | expression ">=" expression   -> gte
-           | expression "+" expression    -> add
-           | expression "-" expression    -> sub
-           | expression "*" expression    -> mul
-           | expression "/" expression    -> div
-           | term
+var_declaration: type declarator ("=" initializer)?
 
-?term: factor
+assignment: lvalue EQUAL expression
 
-?factor: NUMBER                   -> number
-       | NAME                     -> var
-       | func_call
-       | array_access
-       | "(" expression ")"
+lvalue: var
+      | array_access
+      | deref
+      | member_access
+      | ptr_access
 
-INT_TYPE: "int"
-VOID_TYPE: "void"
+var: NAME
+
+array_access: NAME LBRACK expression RBRACK
+
+deref: STAR lvalue
+
+member_access: lvalue DOT NAME
+
+ptr_access: lvalue ARROW NAME
+
+if_stmt: "if" "(" expression ")" statement ["else" statement]
+
+while_stmt: "while" "(" expression ")" statement
+
+for_stmt : FOR LPAR for_control RPAR statement
+
+for_control: inline_declaration? SEMICOLON expression? SEMICOLON expression_list?
+
+expression_list: expression (COMMA expression)*
+
+
+break_stmt: BREAK SEMICOLON
+
+continue_stmt: CONTINUE SEMICOLON
+
+switch_stmt: SWITCH "(" expression ")" "{" case_clause* [default_clause] "}"
+
+case_clause: "case" expression ":" statement*
+
+default_clause: "default" ":" statement*
+
+return_stmt: "return" [expression]
+
+expr_stmt: expression?
+
+
+?expression: assignment_expr
+
+?assignment_expr: logic_or
+                | lvalue "=" assignment_expr -> assign
+
+?logic_or: logic_and
+         | logic_or OR logic_and       -> or
+
+?logic_and: equality
+          | logic_and AND equality      -> and
+
+?equality: relational
+         | equality EQ relational      -> eq
+         | equality NE relational      -> ne
+
+?relational: additive
+           | relational LT additive     -> lt
+           | relational LE additive     -> le
+           | relational GT additive     -> gt
+           | relational GE additive     -> ge
+
+?additive: multiplicative
+         | additive PLUS multiplicative   -> add
+         | additive MINUS multiplicative  -> sub
+
+?multiplicative: multiplicative STAR unary   -> mul
+               | multiplicative SLASH unary  -> div
+               | unary
+
+?unary: UNARY_OPERATOR unary
+      | postfix
+
+?postfix: primary
+        | postfix LBRACK expression RBRACK   -> array_access
+        | postfix DOT NAME                    -> member_access
+        | postfix ARROW NAME                  -> ptr_access
+        | postfix "(" [expression ("," expression)*] ")" -> func_call
+
+?primary: NUMBER                           -> number
+        | NAME                             -> var
+        | "(" expression ")"
+
+UNARY_OPERATOR: MINUS | PLUS | NOT | STAR | AMP
 
 %import common.CNAME -> NAME
-%import common.INT -> NUMBER
-%import common.WS
-%ignore WS
-%ignore /\/\/[^\n]*/
+%import common.SIGNED_NUMBER -> NUMBER
+%import common.WS_INLINE
+%import common.NEWLINE
+
+%ignore WS_INLINE
+%ignore NEWLINE
+
+// Keywords
+INT_TYPE: "int"
+VOID_TYPE: "void"
+TYPEDEF: "typedef"
+STRUCT: "struct"
+
+// Operators and punctuation
+STAR: "*"
+AMP: "&"
+LBRACK: "["
+RBRACK: "]"
+LPAR: "("
+RPAR: ")"
+ARROW: "->"
+
+PLUS: "+"
+MINUS: "-"
+SLASH: "/"
+EQ: "=="
+NE: "!="
+LT: "<"
+LE: "<="
+GT: ">"
+GE: ">="
+AND: "&&"
+OR: "||"
+NOT: "!"
+
+EQUAL: "="
+SEMICOLON: ";"
+COMMA: ","
+DOT: "."
+
+FOR: "for"
+SWITCH: "switch"
+BREAK: "break"
+CONTINUE: "continue"
