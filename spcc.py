@@ -1,3 +1,5 @@
+#!/usr/bin/python3
+
 from lark import Lark, Tree, Token
 
 with open("c16.lark") as f:
