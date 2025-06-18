@@ -11,4 +11,3 @@ C16 is a simple, lightweight C compiler for HuntaBadday's LWC33 CPU. There could
 
 - The actual compiler
 - A proper malloc
-- Parsing and semantics checking for certain C keywords (e.g. `for`)
