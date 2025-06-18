@@ -43,8 +43,6 @@ int main() {
 
     int result = factorial(5);
 
-    int val = 2;
-
     switch (val) {
         case 1:
             result = result + 100;
@@ -111,6 +109,7 @@ def r_note(node, msg):
 
 
 class VarSym:
+
     def __init__(
         self,
         name,
@@ -130,6 +129,7 @@ class VarSym:
 
 
 class FunSym:
+
     def __init__(self, name, ret_type, params, defining_tok):
         self.name = name
         self.ret_type = ret_type
@@ -138,12 +138,14 @@ class FunSym:
 
 
 class StructSym:
+
     def __init__(self, name, fields):
         self.name = name
         self.fields = fields
 
 
 class TypedefSym:
+
     def __init__(self, alias, actual_type):
         self.alias = alias
         self.actual_type = actual_type
@@ -217,16 +219,17 @@ def get_name_token(node):
 
 
 def flatten_type(t):
-
-    ptrs = sum(1 for c in getattr(t, "children", []) if isinstance(c, Token) and c.type == "STAR")
+    ptrs = sum(1 for c in getattr(t, "children", [])
+               if isinstance(c, Token) and c.type == "STAR")
 
     if isinstance(t, Token):
         base = t.value.lower()
     else:
-
         first = t.children[0]
-        if isinstance(first, Tree) and first.data == "base_type":
-
+        if isinstance(first, Token) and first.type == "STRUCT":
+            name_tok = t.children[1]
+            base = f"struct {name_tok.value}"
+        elif isinstance(first, Tree) and first.data == "base_type":
             btok = first.children[0]
             if btok.type == "STRUCT":
                 name_tok = first.children[1]
@@ -238,7 +241,13 @@ def flatten_type(t):
         else:
             base = first.type.lower()
 
-    return base, "*" * ptrs
+    star_str = "*" * ptrs
+    type_str = base + star_str
+    if type_str in typedefs:
+        type_str = typedefs[type_str].actual_type
+
+    return base, star_str
+
 
 def handle_inline_decl(decl_node, scopes, local_vars, current_fun):
     type_tree = decl_node.children[0]
@@ -269,6 +278,7 @@ def handle_inline_decl(decl_node, scopes, local_vars, current_fun):
         init_expr = decl_node.children[-1]
         check_expr(init_expr, scopes, current_fun)
 
+
 def is_scalar_type(typ):
     """Return True if `typ` is a scalar type (e.g., int, char, pointer)."""
     return typ in ("int", "char") or (isinstance(typ, str) and typ.endswith("*"))
@@ -283,7 +293,9 @@ def infer_expr_type(expr, scopes):
       - "struct Point"
       - "struct Point*"
     """
-    # handle a named variable AST node specially
+    if isinstance(expr, Tree) and len(expr.children) == 1:
+        return infer_expr_type(expr.children[0], scopes)
+
     if isinstance(expr, Tree) and expr.data == "var":
         return infer_expr_type(expr.children[0], scopes)
 
@@ -299,9 +311,8 @@ def infer_expr_type(expr, scopes):
             return sym.base_type
 
     if isinstance(expr, Tree) and expr.data == "array_access":
-        base_tok = get_base_var_token(expr)
-        sym = find_var(base_tok, scopes) if base_tok else None
-        if sym and sym.is_array:
+        sym = find_var(get_base_var_token(expr), scopes)
+        if isinstance(sym, VarSym) and sym.is_array:
             return sym.base_type
         t = infer_expr_type(expr.children[0], scopes)
         return t[:-1] if t.endswith("*") else t
@@ -316,13 +327,24 @@ def infer_expr_type(expr, scopes):
 
     if isinstance(expr, Tree) and expr.data == "member_access":
         base = expr.children[0]
-        fld_tok = expr.children[1]
         base_t = infer_expr_type(base, scopes)
-        is_ptr = base_t.endswith("*")
-        struct_name = base_t.split()[1].rstrip("*")
-        struct_sym = structs.get(struct_name)
-        if struct_sym and fld_tok.value in struct_sym.fields:
-            return struct_sym.fields[fld_tok.value]
+        fld_tok = get_name_token(expr)
+        if base_t.startswith("struct ") and not base_t.endswith("*") and fld_tok:
+            struct_name = base_t.split()[1]
+            struct_sym = structs.get(struct_name)
+            if struct_sym and fld_tok.value in struct_sym.fields:
+                return struct_sym.fields[fld_tok.value]
+        return "int"
+
+    if isinstance(expr, Tree) and expr.data == "ptr_access":
+        base = expr.children[0]
+        base_t = infer_expr_type(base, scopes)
+        fld_tok = get_name_token(expr)
+        if base_t.startswith("struct ") and base_t.endswith("*") and fld_tok:
+            struct_name = base_t.split()[1][:-1]
+            struct_sym = structs.get(struct_name)
+            if struct_sym and fld_tok.value in struct_sym.fields:
+                return struct_sym.fields[fld_tok.value]
         return "int"
 
     if isinstance(expr, Tree) and expr.data == "func_call":
@@ -330,17 +352,6 @@ def infer_expr_type(expr, scopes):
         fn = functions.get(name_tok.value) if name_tok else None
         return fn.ret_type if fn else "int"
 
-    if isinstance(expr, Tree) and expr.data == "ptr_access":
-        base, fld_tok = expr.children
-        base_t = infer_expr_type(base, scopes)
-        if base_t.startswith("struct ") and base_t.endswith("*"):
-            struct_name = base_t.split()[1][:-1]
-            struct_sym = structs.get(struct_name)
-            if struct_sym and fld_tok.value in struct_sym.fields:
-                return struct_sym.fields[fld_tok.value]
-        return "int"
-
-    # all arithmetic/comparison operators yield int
     if isinstance(expr, Tree) and expr.data in {
         "add", "sub", "mul", "div",
         "eq", "ne", "lt", "gt", "le", "ge",
@@ -348,30 +359,29 @@ def infer_expr_type(expr, scopes):
     }:
         return "int"
 
-    # literals
     if isinstance(expr, Tree) and expr.data in ("number", "string"):
         return "int"
 
     return "int"
 
+
 for node in tree.children:
     if node.data == "declaration":
         if node.data == "declaration":
-            type_tree   = node.children[0]
-            name_tok    = next(c for c in node.children if isinstance(c, Token) and c.type == "NAME")
+            type_tree = node.children[0]
+            name_tok = next(c for c in node.children if isinstance(c, Token) and c.type == "NAME")
             nums = [c for c in node.children if isinstance(c, Token) and c.type == "NUMBER"]
-            is_array    = bool(nums)
-            size        = int(nums[0].value) if nums else None
+            is_array = bool(nums)
+            size = int(nums[0].value) if nums else None
             btype, ptrs = flatten_type(type_tree)
             globals_sym[name_tok.value] = VarSym(
                 name_tok.value,
                 name_tok,
-                is_array   = is_array,
-                size       = size,
-                is_pointer = bool(ptrs),
-                base_type  = btype
+                is_array=is_array,
+                size=size,
+                is_pointer=bool(ptrs),
+                base_type=btype
             )
-
 
     elif node.data == "function":
         ret_type_tree = node.children[0]
@@ -440,9 +450,12 @@ def check_program(tree):
 
 
 def check_function(fn_node):
-    ret_tok, name_tok = fn_node.children[0], fn_node.children[1]
+    _, name_tok = fn_node.children[0], fn_node.children[1]
     fun_sym = functions.get(name_tok.value)
-    scopes = [{pname: VarSym(pname, None) for pname, _ in fun_sym.params}] if fun_sym else [{}]
+    scopes = [{
+        pname: VarSym(pname, None, is_pointer=ptype.endswith("*"), base_type=ptype.rstrip("*"))
+        for pname, ptype in fun_sym.params
+    }]
     local_vars = []
 
     block = next((c for c in fn_node.children if isinstance(c, Tree) and c.data == "block"), None)
@@ -622,7 +635,6 @@ def get_base_var_token(expr):
 
 
 def check_expr(expr, scopes, current_fun):
-    # catch stray 'break'/'continue' incorrectly lexed as NAME
     if isinstance(expr, Token):
         if expr.type in {"BREAK", "CONTINUE"} or expr.value in {"break", "continue"}:
             return
@@ -633,7 +645,6 @@ def check_expr(expr, scopes, current_fun):
             return
 
     if isinstance(expr, Tree) and expr.data == "array_access":
-        # check both base and index
         check_expr(expr.children[0], scopes, current_fun)
         check_expr(expr.children[1], scopes, current_fun)
 
@@ -652,9 +663,14 @@ def check_expr(expr, scopes, current_fun):
 
     elif isinstance(expr, Tree) and expr.data == "ptr_access":
         base = expr.children[0]
-        fld_tok = expr.children[1]
+        fld_tok = get_name_token(expr.children[1])
         check_expr(base, scopes, current_fun)
         base_type = infer_expr_type(base, scopes)
+
+        if fld_tok is None:
+            r_error(expr, "Missing field name in pointer access", "EXXX")
+            return
+
         if not (base_type.startswith("struct ") and base_type.endswith("*")):
             r_error(base, f"Cannot deref field from non-pointer-to-struct `{base_type}`", "E013")
         else:
@@ -683,7 +699,6 @@ def check_expr(expr, scopes, current_fun):
                 check_expr(a, scopes, current_fun)
 
     else:
-        # recurse into any other children
         for c in getattr(expr, "children", []):
             check_expr(c, scopes, current_fun)
 
