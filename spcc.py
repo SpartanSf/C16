@@ -273,7 +273,10 @@ def handle_inline_decl(decl_node, scopes, local_vars, current_fun):
         base_type=btype,
     )
 
-    scopes[-1][name_tok.value] = sym
+    if name_tok.value in scopes[-1]:
+        r_error(name_tok, f"redeclaration of variable `{name_tok.value}`", "E004")
+    else:
+        scopes[-1][name_tok.value] = sym
     local_vars.append(sym)
 
     if len(decl_node.children) > 2:
@@ -400,7 +403,7 @@ for node in tree.children:
                 btype, ptrs = flatten_type(param_type)
                 param_name_tok = get_param_name(param_name_node)
                 if param_name_tok is None:
-                    r_error(p, "Could not find parameter name token", "EXXX")
+                    r_error(p, "Could not find parameter name token", "E017") 
                     continue
                 params.append((param_name_tok.value, btype + ptrs))
 
@@ -490,7 +493,7 @@ def check_block(block_node, scopes, current_fun, local_vars):
             name_node = stmt.children[1]
             name_tok = get_name_token(name_node)
             if not name_tok:
-                r_error(stmt, "Could not find variable name token in declaration", "EXXX")
+                r_error(stmt, "Could not find variable name token in declaration", "E018")
                 continue
 
             nums = [c for c in stmt.children if isinstance(c, Token) and c.type == "NUMBER"]
@@ -506,7 +509,10 @@ def check_block(block_node, scopes, current_fun, local_vars):
                 is_pointer=(len(ptrs) > 0),
                 base_type=btype,
             )
-            scopes[-1][name_tok.value] = sym
+            if name_tok.value in scopes[-1]:
+                r_error(name_tok, f"redeclaration of variable `{name_tok.value}`", "E004")
+            else:
+                scopes[-1][name_tok.value] = sym
             local_vars.append(sym)
 
             if len(stmt.children) > 2:
@@ -574,7 +580,7 @@ def check_block(block_node, scopes, current_fun, local_vars):
                     else:
                         body = c
             if control is None or body is None:
-                r_error(stmt, "Malformed `for` statement", "EXXX")
+                r_error(stmt, "Malformed `for` statement", "E019")
                 continue
 
             init = cond = post = None
@@ -644,7 +650,9 @@ def check_expr(expr, scopes, current_fun):
             sym = find_var(expr, scopes)
             if sym:
                 sym.used = True
-            return
+                parent = getattr(expr, "parent", None)
+                if sym.is_array and not isinstance(parent, Tree) or (parent and parent.data not in {"array_access", "addr_of"}):
+                    r_error(expr, f"array variable `{sym.name}` used without indexing", "E006")
 
     if isinstance(expr, Tree) and expr.data == "array_access":
         check_expr(expr.children[0], scopes, current_fun)
@@ -652,7 +660,7 @@ def check_expr(expr, scopes, current_fun):
 
     elif isinstance(expr, Tree) and expr.data == "member_access":
         base = expr.children[0]
-        fld_tok = expr.children[1]
+        fld_tok = expr.children[2]
         check_expr(base, scopes, current_fun)
         base_type = infer_expr_type(base, scopes)
         if not base_type.startswith("struct "):
@@ -662,17 +670,12 @@ def check_expr(expr, scopes, current_fun):
             struct_sym = structs.get(struct_name)
             if not struct_sym or fld_tok.value not in struct_sym.fields:
                 r_error(fld_tok, f"`{struct_name}` has no field `{fld_tok.value}`", "E014")
-
+                
     elif isinstance(expr, Tree) and expr.data == "ptr_access":
         base = expr.children[0]
-        fld_tok = get_name_token(expr.children[1])
+        fld_tok = expr.children[2]
         check_expr(base, scopes, current_fun)
         base_type = infer_expr_type(base, scopes)
-
-        if fld_tok is None:
-            r_error(expr, "Missing field name in pointer access", "EXXX")
-            return
-
         if not (base_type.startswith("struct ") and base_type.endswith("*")):
             r_error(base, f"Cannot deref field from non-pointer-to-struct `{base_type}`", "E013")
         else:
@@ -684,7 +687,7 @@ def check_expr(expr, scopes, current_fun):
     elif isinstance(expr, Tree) and expr.data == "func_call":
         name_tok = get_name_token(expr.children[0])
         if name_tok is None:
-            r_error(expr, "Could not find function name in call", "EXXX")
+            r_error(expr, "Could not find function name in call", "E021")
             return
         if name_tok.value not in functions:
             r_error(name_tok, f"call to undeclared function `{name_tok.value}`", "E009")
