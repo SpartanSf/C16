@@ -28,6 +28,7 @@ int factorial(int n) {
 int main() {
     int arr[5] = {1, 2, 3, 4, 5};
     int total = 0;
+    int val = 2;
 
     for (int i = 0; i < 5; i = i + 1) {
         total = total + arr[i];
@@ -727,3 +728,188 @@ if any(kind == "error" for _, _, _, kind, _ in diagnostics):
     print(f"\nFound {sum(1 for d in diagnostics if d[3] == 'error')} error(s). See errors.md for more information on error codes.")
 else:
     print("\nNo errors found.")
+
+print("Compiling...")
+
+
+
+
+class CodeGenerator:
+    def __init__(self):
+        self.output = []
+        self.label_count = 0
+        self.data_section = []
+        self.current_function = None
+        self.local_offsets = {}
+        self.local_size = 0
+        self.param_count = 0
+        self.loop_exit_stack = []
+        self.loop_start_stack = []
+        self.switch_stack = []
+        self.frame_pointer_reg = 'r11'
+        self.stack_pointer_reg = 'sp'
+        self.return_value_reg = 'r1'
+
+    def new_label(self, prefix):
+        self.label_count += 1
+        return f"{prefix}_{self.label_count}"
+
+    def emit(self, instruction, comment=None):
+        if comment:
+            self.output.append(f"{instruction:20} ; {comment}")
+        else:
+            self.output.append(instruction)
+
+    def emit_data(self, name, value):
+        self.data_section.append(f"{name}:")
+        if isinstance(value, list):
+            for val in value:
+                self.data_section.append(f"    #d {val}")
+        else:
+            self.data_section.append(f"    #d {value}")
+
+    def function_prologue(self, name, param_count):
+        self.emit(f"{name}:")
+        self.current_function = name
+        self.param_count = param_count
+        self.emit(f"push {self.frame_pointer_reg}", "Save frame pointer")
+        self.emit(f"mov {self.frame_pointer_reg}, {self.stack_pointer_reg}", "Set new frame pointer")
+        if self.local_size > 0:
+            self.emit(f"sub {self.stack_pointer_reg}, {self.local_size}", "Allocate space for locals")
+
+    def function_epilogue(self):
+        if self.local_size > 0:
+            self.emit(f"add {self.stack_pointer_reg}, {self.local_size}", "Deallocate locals")
+        self.emit(f"mov {self.stack_pointer_reg}, {self.frame_pointer_reg}", "Restore stack pointer")
+        self.emit(f"pop {self.frame_pointer_reg}", "Restore frame pointer")
+        self.emit("rts", "Return from function")
+
+    def generate_return(self, stmt, scopes, current_fun):
+        if stmt.children:
+            self.generate_expr(stmt.children[0], scopes, current_fun)
+            if self.return_value_reg != 'r1':
+                self.emit(f"mov {self.return_value_reg}, r1", "Set return value")
+        self.emit(f"jmp _{self.current_function}_exit", "Jump to function exit")
+
+    def generate_expr(self, expr, scopes, current_fun):
+        if isinstance(expr, Token) and expr.type == "NUMBER":
+            self.emit(f"mov r1, {expr.value}", "Load constant")
+        elif isinstance(expr, Token) and expr.type == "NAME":
+            var_name = expr.value
+            if var_name in self.local_offsets:
+                offset = self.local_offsets[var_name]
+                self.emit(f"lod r1, [r11+{offset}]", f"Load {var_name}")
+            else:
+                self.emit(f"lod r1, [{var_name}]", f"Load global {var_name}")
+        elif isinstance(expr, Tree) and expr.data == "add":
+            self.generate_binop(expr, "add", scopes, current_fun)
+        else:
+            for child in expr.children:
+                if isinstance(child, (Tree, Token)):
+                    self.generate_expr(child, scopes, current_fun)
+
+    def generate_binop(self, expr, op, scopes, current_fun):
+        self.generate_expr(expr.children[0], scopes, current_fun)
+        self.emit("push r1", "Save left operand")
+        self.generate_expr(expr.children[1], scopes, current_fun)
+        self.emit("pop r2", "Restore left operand")
+        self.emit(f"{op} r2, r1", f"{op} operation")
+        self.emit("mov r1, r2", "Save result")
+
+    def generate_var_decl(self, stmt, scopes, current_fun):
+        name_tok = get_name_token(stmt.children[1])
+        name = name_tok.value
+        self.local_size += 2
+        offset = -self.local_size
+        self.local_offsets[name] = offset
+
+        if len(stmt.children) > 2:
+            self.generate_expr(stmt.children[2], scopes, current_fun)
+            self.emit(f"sto [r11+{offset}], r1", f"Initialize {name}")
+
+    def generate_block(self, block_node, scopes, current_fun, local_vars):
+        for child in block_node.children:
+            stmt = child
+            if isinstance(child, Tree) and child.data == "statement":
+                stmt = child.children[0]
+            
+            if stmt.data == "var_declaration":
+                self.generate_var_decl(stmt, scopes, current_fun)
+            elif stmt.data == "return_stmt":
+                self.generate_return(stmt, scopes, current_fun)
+
+    def generate_function(self, node):
+        ret_type_tree = node.children[0]
+        name_tok = node.children[1]
+        name = name_tok.value
+
+        parameters = None
+        block = None
+        for child in node.children:
+            if isinstance(child, Tree):
+                if child.data == "parameters":
+                    parameters = child
+                elif child.data == "block":
+                    block = child
+
+        param_count = len(parameters.children) if parameters else 0
+
+        local_vars = []
+        self.local_offsets = {}
+        self.local_size = 0
+        if block:
+            for child in block.children:
+                if isinstance(child, Tree) and child.data == "statement":
+                    stmt = child.children[0]
+                    if stmt.data == "var_declaration":
+                        name_tok = get_name_token(stmt.children[1])
+                        local_vars.append(name_tok.value)
+
+        self.function_prologue(name, param_count)
+        
+        if block:
+            current_offset = -2
+            for var in local_vars:
+                self.local_offsets[var] = current_offset
+                current_offset -= 2
+            
+            scopes = [{}]
+            self.generate_block(block, scopes, name, local_vars)
+        
+        self.emit(f"_{name}_exit:")
+        self.function_epilogue()
+        self.current_function = None
+
+def compile_to_assembly(tree):
+    cg = CodeGenerator()
+    
+    cg.emit("#bankdef mini33bank {")
+    cg.emit("    #bits 16")
+    cg.emit("    #addr 0xd000")
+    cg.emit("    #size 0x1000")
+    cg.emit("    #outp 0")
+    cg.emit("}")
+    cg.emit("#bank mini33bank")
+    cg.emit("jmp _start", "Skip data section")
+    
+    for node in tree.children:
+        if node.data == "function":
+            cg.generate_function(node)
+        elif node.data == "declaration":
+            cg.generate_global(node)
+    
+    cg.emit("_start:")
+    cg.emit("jsr main", "Call main function")
+    cg.emit("jmp $", "Halt after execution")
+    
+    if cg.data_section:
+        cg.output.extend([""] + cg.data_section)
+    
+    return cg.output
+
+if not any(kind == "error" for _, _, _, kind, _ in diagnostics):
+    assembly = compile_to_assembly(tree)
+    print("\nCompilation successful. Generated assembly:")
+    print("\n".join(assembly))
+else:
+    print("\nCompilation aborted due to errors")
