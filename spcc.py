@@ -734,151 +734,288 @@ print("Compiling...")
 
 
 
+# Load C16 grammar
+with open("c16.lark") as f:
+    c16_grammar = f.read()
+
 class CodeGenerator:
     def __init__(self):
         self.output = []
-        self.label_count = 0
         self.data_section = []
+        self.label_count = 0
         self.current_function = None
         self.local_offsets = {}
         self.local_size = 0
         self.param_count = 0
-        self.loop_exit_stack = []
         self.loop_start_stack = []
-        self.switch_stack = []
-        self.frame_pointer_reg = 'r11'
-        self.stack_pointer_reg = 'sp'
-        self.return_value_reg = 'r1'
+        self.loop_end_stack = []
+        self.switch_end_stack = []
+        self.frame_ptr = 'r11'
+        self.sp = 'sp'
+        self.ret_reg = 'r1'
 
     def new_label(self, prefix):
         self.label_count += 1
         return f"{prefix}_{self.label_count}"
 
-    def emit(self, instruction, comment=None):
+    def emit(self, instr, comment=None):
         if comment:
-            self.output.append(f"{instruction:20} ; {comment}")
+            self.output.append(f"{instr:30} ; {comment}")
         else:
-            self.output.append(instruction)
+            self.output.append(instr)
 
-    def emit_data(self, name, value):
+    def emit_data(self, name, vals):
         self.data_section.append(f"{name}:")
-        if isinstance(value, list):
-            for val in value:
-                self.data_section.append(f"    #d {val}")
-        else:
-            self.data_section.append(f"    #d {value}")
+        for v in (vals if isinstance(vals, list) else [vals]):
+            self.data_section.append(f"    #d {v}")
 
-    def function_prologue(self, name, param_count):
+    def prologue(self, name):
         self.emit(f"{name}:")
         self.current_function = name
-        self.param_count = param_count
-        self.emit(f"push {self.frame_pointer_reg}", "Save frame pointer")
-        self.emit(f"mov {self.frame_pointer_reg}, {self.stack_pointer_reg}", "Set new frame pointer")
-        if self.local_size > 0:
-            self.emit(f"sub {self.stack_pointer_reg}, {self.local_size}", "Allocate space for locals")
+        self.emit(f"PUSH {self.frame_ptr}", "save fp")
+        self.emit(f"MOV {self.frame_ptr}, {self.sp}", "set fp")
+        if self.local_size:
+            self.emit(f"SUB {self.sp}, #{self.local_size}", "alloc locals")
 
-    def function_epilogue(self):
-        if self.local_size > 0:
-            self.emit(f"add {self.stack_pointer_reg}, {self.local_size}", "Deallocate locals")
-        self.emit(f"mov {self.stack_pointer_reg}, {self.frame_pointer_reg}", "Restore stack pointer")
-        self.emit(f"pop {self.frame_pointer_reg}", "Restore frame pointer")
-        self.emit("rts", "Return from function")
+    def epilogue(self):
+        if self.local_size:
+            self.emit(f"ADD {self.sp}, #{self.local_size}", "dealloc locals")
+        self.emit(f"MOV {self.sp}, {self.frame_ptr}", "restore sp")
+        self.emit(f"POP {self.frame_ptr}", "restore fp")
+        self.emit("RTS", "return")
+        self.current_function = None
 
-    def generate_return(self, stmt, scopes, current_fun):
-        if stmt.children:
-            self.generate_expr(stmt.children[0], scopes, current_fun)
-            if self.return_value_reg != 'r1':
-                self.emit(f"mov {self.return_value_reg}, r1", "Set return value")
-        self.emit(f"jmp _{self.current_function}_exit", "Jump to function exit")
+    def compile(self, tree):
+        self.emit("#bankdef mini33bank {#bits 16 #addr 0xd000 #size 0x1000 #outp 0}")
+        self.emit("#bank mini33bank")
+        self.emit_data("heap_ptr", 0x8000)
+        self.emit("")
+        self.emit("malloc:")
+        self.emit("LOD r0, [heap_ptr]", "load heap_ptr")
+        self.emit("MOV r2, r0", "save return ptr")
+        self.emit(f"ADD r0, {self.ret_reg}", "heap += size")
+        self.emit("STO r0, [heap_ptr]", "store new heap_ptr")
+        self.emit(f"MOV {self.ret_reg}, r2", "return old heap")
+        self.emit("RTS", "return")
+        self.emit("")
+        self.emit("JMP _start", "skip data/code below")
 
-    def generate_expr(self, expr, scopes, current_fun):
-        if isinstance(expr, Token) and expr.type == "NUMBER":
-            self.emit(f"mov r1, {expr.value}", "Load constant")
-        elif isinstance(expr, Token) and expr.type == "NAME":
-            var_name = expr.value
-            if var_name in self.local_offsets:
-                offset = self.local_offsets[var_name]
-                self.emit(f"lod r1, [r11+{offset}]", f"Load {var_name}")
-            else:
-                self.emit(f"lod r1, [{var_name}]", f"Load global {var_name}")
-        elif isinstance(expr, Tree) and expr.data == "add":
-            self.generate_binop(expr, "add", scopes, current_fun)
-        else:
-            for child in expr.children:
-                if isinstance(child, (Tree, Token)):
-                    self.generate_expr(child, scopes, current_fun)
+        for node in tree.children:
+            if isinstance(node, Tree):
+                if node.data == 'declaration':
+                    self.generate_global(node)
+                elif node.data == 'function':
+                    self.generate_function(node)
 
-    def generate_binop(self, expr, op, scopes, current_fun):
-        self.generate_expr(expr.children[0], scopes, current_fun)
-        self.emit("push r1", "Save left operand")
-        self.generate_expr(expr.children[1], scopes, current_fun)
-        self.emit("pop r2", "Restore left operand")
-        self.emit(f"{op} r2, r1", f"{op} operation")
-        self.emit("mov r1, r2", "Save result")
+        self.emit("_start:")
+        self.emit("JSR main", "call main")
+        self.emit("JMP $", "halt")
 
-    def generate_var_decl(self, stmt, scopes, current_fun):
-        name_tok = get_name_token(stmt.children[1])
-        name = name_tok.value
-        self.local_size += 2
-        offset = -self.local_size
-        self.local_offsets[name] = offset
+        if self.data_section:
+            self.output.append("")
+            self.output.extend(self.data_section)
 
-        if len(stmt.children) > 2:
-            self.generate_expr(stmt.children[2], scopes, current_fun)
-            self.emit(f"sto [r11+{offset}], r1", f"Initialize {name}")
+        return self.output
 
-    def generate_block(self, block_node, scopes, current_fun, local_vars):
-        for child in block_node.children:
-            stmt = child
-            if isinstance(child, Tree) and child.data == "statement":
-                stmt = child.children[0]
-            
-            if stmt.data == "var_declaration":
-                self.generate_var_decl(stmt, scopes, current_fun)
-            elif stmt.data == "return_stmt":
-                self.generate_return(stmt, scopes, current_fun)
+    def generate_global(self, node):
+        name_tok = node.children[1]
+        if isinstance(name_tok, Token):
+            name = name_tok.value
+            self.emit_data(name, 0)
 
     def generate_function(self, node):
-        ret_type_tree = node.children[0]
-        name_tok = node.children[1]
-        name = name_tok.value
-
-        parameters = None
-        block = None
-        for child in node.children:
-            if isinstance(child, Tree):
-                if child.data == "parameters":
-                    parameters = child
-                elif child.data == "block":
-                    block = child
-
-        param_count = len(parameters.children) if parameters else 0
-
-        local_vars = []
-        self.local_offsets = {}
+        name = node.children[1].value
+        block = next(c for c in node.children if isinstance(c, Tree) and c.data == 'block')
+        self.local_offsets.clear()
         self.local_size = 0
-        if block:
-            for child in block.children:
-                if isinstance(child, Tree) and child.data == "statement":
-                    stmt = child.children[0]
-                    if stmt.data == "var_declaration":
-                        name_tok = get_name_token(stmt.children[1])
-                        local_vars.append(name_tok.value)
-
-        self.function_prologue(name, param_count)
-        
-        if block:
-            current_offset = -2
-            for var in local_vars:
-                self.local_offsets[var] = current_offset
-                current_offset -= 2
-            
-            scopes = [{}]
-            self.generate_block(block, scopes, name, local_vars)
-        
+        offset = -2
+        for stmt in block.children:
+            if isinstance(stmt, Tree) and stmt.data == 'var_declaration':
+                decl = stmt.children[1]
+                varname = decl.children[0].value
+                self.local_offsets[varname] = offset
+                offset -= 2
+                self.local_size += 2
+        self.prologue(name)
+        for stmt in block.children:
+            self.generate_statement(stmt)
         self.emit(f"_{name}_exit:")
-        self.function_epilogue()
-        self.current_function = None
+        self.epilogue()
+
+    def generate_statement(self, stmt):
+        if isinstance(stmt, Token): return
+        if stmt.data == 'var_declaration':
+            self.generate_var_decl(stmt)
+        elif stmt.data == 'return_stmt':
+            self.generate_return(stmt)
+        elif stmt.data == 'if_stmt':
+            self.generate_if(stmt)
+        elif stmt.data == 'for_stmt':
+            self.generate_for(stmt)
+        elif stmt.data == 'while_stmt':
+            self.generate_while(stmt)
+        elif stmt.data == 'switch_stmt':
+            self.generate_switch(stmt)
+        elif stmt.data == 'break_stmt':
+            self.emit(f"JMP {self.loop_end_stack[-1]}", "break")
+        elif stmt.data == 'continue_stmt':
+            self.emit(f"JMP {self.loop_start_stack[-1]}", "continue")
+        elif stmt.data == 'expr_stmt' and stmt.children:
+            self.generate_expr(stmt.children[0])
+
+    def generate_var_decl(self, node):
+        decl = node.children[1]
+        name = decl.children[0].value
+        offset = self.local_offsets[name]
+        size = 2
+        if len(decl.children) == 2:
+            try:
+                length = int(decl.children[1].value)
+                size = 2 * length
+            except:
+                pass
+        self.emit(f"MOV {self.ret_reg}, #{size}", f"malloc size for {name}")
+        self.emit("JSR malloc", f"call malloc for {name}")
+        self.emit(f"STO {self.ret_reg}, [{self.frame_ptr} + #{-offset}]", f"store ptr for {name}")
+
+    def generate_return(self, node):
+        if node.children:
+            self.generate_expr(node.children[0])
+        self.emit(f"JMP _{self.current_function}_exit", "return")
+
+    def generate_expr(self, expr):
+        if isinstance(expr, Token):
+            if expr.type == 'NUMBER':
+                self.emit(f"MOV {self.ret_reg}, #{expr.value}", "load const")
+            elif expr.type == 'NAME':
+                if expr.value in self.local_offsets:
+                    off = self.local_offsets[expr.value]
+                    self.emit(f"LOD {self.ret_reg}, [{self.frame_ptr} + #{-off}]", f"load local {expr.value}")
+                else:
+                    self.emit(f"LOD {self.ret_reg}, [{expr.value}]", f"load global {expr.value}")
+        elif isinstance(expr, Tree):
+            if expr.data == 'assign':
+                lhs, rhs = expr.children
+                if isinstance(lhs, Tree) and lhs.data == 'var':
+                    varname = lhs.children[0].value
+                    self.generate_expr(rhs)
+                    if varname in self.local_offsets:
+                        off = self.local_offsets[varname]
+                        self.emit(f"STO {self.ret_reg}, [{self.frame_ptr} + #{-off}]", f"assign {varname}")
+                    else:
+                        self.emit(f"STO {self.ret_reg}, [{varname}]", f"assign {varname}")
+            elif expr.data in ('add', 'sub', 'mul', 'div'):
+                op_map = {
+                    'add': 'ADD',
+                    'sub': 'SUB',
+                    'mul': 'MUL',
+                    'div': 'DIV'
+                }
+                lhs, rhs = expr.children
+                self.generate_expr(lhs)
+                self.emit("PUSH r1")
+                self.generate_expr(rhs)
+                self.emit("POP r0")
+                self.emit(f"{op_map[expr.data]} r0, r1")
+                self.emit("MOV r1, r0")
+
+    def generate_if(self, node):
+        cond = node.children[0]
+        then_blk = node.children[1] if len(node.children) > 1 else Tree("block", [])
+        else_blk = node.children[2] if len(node.children) > 2 else None
+        else_lbl = self.new_label("else")
+        end_lbl = self.new_label("ifend")
+        self.generate_expr(cond)
+        self.emit("CMP r1, #0", "if cond")
+        self.emit(f"BEQ {else_lbl}", "jump to else")
+        for s in then_blk.children:
+            self.generate_statement(s)
+        self.emit(f"JMP {end_lbl}", "skip else")
+        self.emit(f"{else_lbl}:")
+        if else_blk:
+            for s in else_blk.children:
+                self.generate_statement(s)
+        self.emit(f"{end_lbl}:")
+
+    def generate_while(self, node):
+        cond = node.children[0]
+        body = node.children[1] if len(node.children) > 1 else Tree("block", [])
+        start = self.new_label("while")
+        end = self.new_label("whileend")
+        self.loop_start_stack.append(start)
+        self.loop_end_stack.append(end)
+        self.emit(f"{start}:")
+        self.generate_expr(cond)
+        self.emit("CMP r1, #0", "while cond")
+        self.emit(f"BEQ {end}", "exit loop")
+        for s in body.children:
+            self.generate_statement(s)
+        self.emit(f"JMP {start}", "repeat")
+        self.emit(f"{end}:")
+        self.loop_start_stack.pop()
+        self.loop_end_stack.pop()
+
+    def generate_for(self, node):
+        init = node.children[0] if len(node.children) > 0 else None
+        cond = node.children[1] if len(node.children) > 1 else None
+        upd = node.children[2] if len(node.children) > 2 else None
+        body = node.children[3] if len(node.children) > 3 else Tree("block", [])
+        start = self.new_label("for")
+        end = self.new_label("forend")
+        if init:
+            self.generate_statement(init)
+        self.emit(f"{start}:")
+        if cond:
+            self.generate_expr(cond)
+            self.emit("CMP r1, #0", "for cond")
+            self.emit(f"BEQ {end}", "exit for")
+        self.loop_start_stack.append(start)
+        self.loop_end_stack.append(end)
+        for s in body.children:
+            self.generate_statement(s)
+        if upd:
+            self.generate_expr(upd)
+        self.emit(f"JMP {start}", "loop")
+        self.emit(f"{end}:")
+        self.loop_start_stack.pop()
+        self.loop_end_stack.pop()
+
+    def generate_switch(self, node):
+        expr = node.children[0]
+        cases = node.children[1:]
+        end = self.new_label("switchend")
+        self.switch_end_stack.append(end)
+        self.generate_expr(expr)
+        case_labels = {}
+        default_lbl = self.new_label("default")
+        for case in cases:
+            if isinstance(case, Tree) and case.data == 'case_clause':
+                val_node = case.children[0]
+                val = val_node.children[0].value if isinstance(val_node, Tree) else val_node.value
+                lbl = self.new_label(f"case_{val}")
+                case_labels[val] = lbl
+                self.emit(f"CMP r1, #{val}", "switch cmp")
+                self.emit(f"BEQ {lbl}", f"case {val}")
+        self.emit(f"JMP {default_lbl}", "to default")
+        for case in cases:
+            if isinstance(case, Tree):
+                if case.data == 'case_clause':
+                    val_node = case.children[0]
+                    val = val_node.children[0].value if isinstance(val_node, Tree) else val_node.value
+                    lbl = case_labels[val]
+                    self.emit(f"{lbl}:")
+                    for s in case.children[1:]:
+                        self.generate_statement(s)
+                    self.emit(f"JMP {end}", "break")
+                elif case.data == 'default_clause':
+                    self.emit(f"{default_lbl}:")
+                    for s in case.children[1:]:
+                        self.generate_statement(s)
+        self.emit(f"{end}:")
+        self.switch_end_stack.pop()
+
+
+
 
 def compile_to_assembly(tree):
     cg = CodeGenerator()
